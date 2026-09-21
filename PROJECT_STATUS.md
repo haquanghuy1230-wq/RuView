@@ -67,3 +67,31 @@ C:\RuView\RuView\firmware\esp32-csi-node
 3. Khi CSI đủ dày: đối chiếu magic và cấu trúc gói với source, rồi thu phòng yên và phòng có người di chuyển để so sánh.
 4. Đặt cố định `IDF_TARGET` cho terminal ESP-IDF.
 5. IP có thể đổi lại: kiểm tra IP của PC đầu mỗi buổi. Cách bền vững là có quyền quản trị router (DHCP reservation) hoặc đặt IP tĩnh trên Windows với địa chỉ ngoài dải DHCP.
+
+## Cập nhật 2026-09-21
+
+### Điều chỉnh so với mục 2026-09-19
+- "RuView aggregator receiving UDP CSI packets": đã có bằng chứng gói UDP từ board tới PC (cổng 5005). Việc xác minh CSI thô xem bên dưới.
+
+### Đã kiểm chứng (đọc source + dữ liệu thu)
+- **Cấu hình CSI** (`main/csi_collector.c`): bật `lltf_en`, `htltf_en`, `stbc_htltf2_en`, `ltf_merge_en`; tắt `channel_filter_en`, `manu_scale`. CSI do callback của ESP-IDF (`esp_wifi_set_csi_rx_cb`) cung cấp, I/Q được chép từ buffer của driver.
+- **Nguồn khung CSI:** firmware ping gateway 50 Hz (`CONFIG_CSI_SELF_PING_HZ=50`, mức tối đa cho phép). Bộ lọc khung là MGMT, nâng lên MGMT+DATA cho board không có màn hình (RuView#893). Callback ping là hàm rỗng nên firmware không biết router có trả lời hay không.
+- **Không có đường giả lập trên board:** code mock CSI (`CONFIG_CSI_MOCK_ENABLED`) chỉ dành cho QEMU; log khởi động của board không có dòng `Mock CSI active`.
+- **Bảng magic UDP:** `0xC5110001` raw CSI, `...02` vitals, `...03` feature vector, `...04` fused vitals, `...05` compressed CSI, `...06` feature state, `...07` WASM output, `0xC511A110` sync, `0xC5118100` mesh.
+- **Header raw CSI (20 byte):** magic, node ID, số anten (cố định 1), số subcarrier, tần số MHz (tính từ kênh), seq, RSSI, noise floor, ppdu_type, cờ; sau đó I/Q thô.
+- **Thu 15 giây phòng yên:** 29 gói = 16 feature state (60 B), 5 raw CSI (148 B), 4 vitals (32 B), 4 feature vector (48 B). Tốc độ raw CSI chỉ khoảng 0,33 gói/s.
+- **Giải mã 5 gói raw CSI:** node=1, 1 anten, 64 subcarrier, 2427 MHz (kênh 4), seq 321 đến 325 liên tiếp, RSSI -24 (4 gói) và -84 (1 gói) khớp log serial, noise -94, cờ 0x10 (bit ESP-NOW sync). Mỗi gói có đúng 12 subcarrier biên độ 0 (gói 1: chỉ số 0 và 27 đến 37). Biên độ các subcarrier còn lại 10 đến 17, thay đổi trơn giữa các subcarrier kề nhau. Chênh lệch biên độ trung bình giữa các gói liền kề: 0,5 / 1,0 / 4,4 / 3,6 (hai giá trị lớn liên quan gói RSSI -84).
+
+### Diễn giải (giả thuyết, chưa kiểm chứng đầy đủ)
+- 12 subcarrier bằng 0 khớp cấu trúc LLTF 20 MHz của 802.11 (52 subcarrier dùng, còn lại là DC và guard band), phù hợp với CSI thật của radio.
+- Độ dài 128 B (LLTF) và 384 B (HT-LTF + STBC) có thể tùy loại khung; log từng có `len=384`. Chưa kiểm chứng.
+- Gói RSSI -84 có thể do thiết bị phát khác; header không có MAC nguồn nên chưa xác minh.
+
+### Chưa kết luận
+- Chưa chứng minh CSI phản ánh chuyển động/vị trí: mới có 5 gói phòng yên, chưa thu có người.
+- Tốc độ CSI thô quá thấp cho phát hiện chuyển động; cần tìm nguyên nhân và tăng tốc độ trước khi thu dataset.
+
+### Việc tiếp theo
+1. Xác định vì sao CSI thô chỉ ~0,33 gói/s (router có trả lời ping không; loại khung nào tạo callback). Không bỏ gate, không tăng tốc độ ping.
+2. Khi CSI đủ dày: thu phòng yên và phòng có người di chuyển, so biên độ theo thời gian.
+3. Đặt cố định `IDF_TARGET`; xử lý IP (DHCP reservation hoặc IP tĩnh); theo dõi brownout.
